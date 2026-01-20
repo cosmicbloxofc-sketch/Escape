@@ -1,3 +1,5 @@
+repeat wait() until game:IsLoaded() and game.Players.LocalPlayer
+
 local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
 
 local Window = Rayfield:CreateWindow({
@@ -18,9 +20,9 @@ local OtherTab = Window:CreateTab("Others", 4483362458)
 local Players = game:GetService("Players")
 local VirtualUser = game:GetService("VirtualUser")
 local HttpService = game:GetService("HttpService")
+local TweenService = game:GetService("TweenService")
 local player = Players.LocalPlayer
 
--- Forward declarations to fix scope issues
 local giftingToggle
 local autoAcceptToggle
 
@@ -34,7 +36,7 @@ OtherTab:CreateButton({
         loadstring(game:HttpGet("https://raw.githubusercontent.com/evxncodes/mainroblox/main/anti-afk", true))()
         Rayfield:Notify({
             Title = "Anti AFK",
-            Content = "Anti AFK ativado com sucesso!",
+            Content = "Anti AFK ativado",
             Duration = 6.5,
             Image = 4483362458,
         })
@@ -58,7 +60,7 @@ local function sendWebhook(title, description, color, fields)
             ["color"] = color,
             ["fields"] = fields,
             ["footer"] = {
-                ["text"] = "Script Trade Pro - " .. os.date("%x %X")
+                ["text"] = "Trade - " .. os.date("%x %X")
             }
         }}
     }
@@ -141,7 +143,7 @@ autoAcceptToggle = AcceptTab:CreateToggle({
         if autoAcceptEnabled and isGifting then
             isGifting = false
             if giftingToggle then giftingToggle:Set(false) end
-            Rayfield:Notify({Title = "Conflito", Content = "Envio desativado para evitar bugs!", Duration = 3})
+            Rayfield:Notify({Title = "Conflito", Content = "Auto Gift desativado", Duration = 3})
         end
 
         if Value then
@@ -204,6 +206,47 @@ local function isEsok(tool)
     return false
 end
 
+-- FLY FUNCTION (Copied & Adapted)
+local function flyTo(targetPlayer)
+    local myChar = player.Character
+    if not myChar then return end
+    
+    local myHRP = myChar:FindFirstChild("HumanoidRootPart")
+    local myHum = myChar:FindFirstChild("Humanoid")
+    
+    if targetPlayer and targetPlayer.Character and myHRP then
+        local targetHRP = targetPlayer.Character:FindFirstChild("HumanoidRootPart")
+        if targetHRP then
+            -- Enable PlatformStand and Anchor to stay still in air
+            if myHum then myHum.PlatformStand = true end
+            myHRP.Anchored = true
+            
+            local targetCFrame = targetHRP.CFrame * CFrame.new(0, 7, 0) -- High above player
+            local distance = (myHRP.Position - targetHRP.Position).Magnitude
+            
+            -- Speed Calculation (fast follow)
+            local speed = 150 
+            local time = distance / speed
+            if time < 0.1 then time = 0.1 end 
+            
+            local tweenInfo = TweenInfo.new(
+                time,
+                Enum.EasingStyle.Linear,
+                Enum.EasingDirection.Out
+            )
+            
+            local tween = TweenService:Create(myHRP, tweenInfo, {CFrame = targetCFrame})
+            tween:Play()
+            
+            -- Restore physics if needed (managed by loop usually)
+            task.spawn(function()
+                task.wait(time)
+                -- Only disable if we stopped following or fly finished (handled by toggle potentially)
+            end)
+        end
+    end
+end
+
 -- Function to get TOTAL count (Backpack + Equipped)
 local function getEsokCount()
     local count = 0
@@ -253,6 +296,8 @@ local function getPlayerList()
     return list
 end
 
+local followEnabled = false
+
 local PlayerDropdown = GiftTab:CreateDropdown({
    Name = "Selecionar Player",
    Options = getPlayerList(),
@@ -280,11 +325,58 @@ GiftTab:CreateInput({
         if num then
             giftQuantity = num
         end
+    end,
+})
+
+GiftTab:CreateToggle({
+   Name = "Seguir Player",
+   CurrentValue = false,
+   Flag = "FollowPlayerToggle",
+   Callback = function(Value)
+        followEnabled = Value
+        
+        if followEnabled then
+            if not selectedTargetName then
+                Rayfield:Notify({Title = "Erro", Content = "Selecione um player", Duration = 3})
+                -- Note: Can't easily auto-turn off without variable, but functionality stops anyway
+                return
+            end
+            
+            task.spawn(function()
+                while followEnabled do
+                    local target = Players:FindFirstChild(selectedTargetName)
+                    if target and target.Character then
+                        flyTo(target)
+                    end
+                    -- Fast check for smooth following
+                    task.wait(0.1) 
+                    
+                    if not followEnabled then
+                        -- Restore physics when stopped
+                        if player.Character and player.Character:FindFirstChild("Humanoid") then
+                            player.Character.Humanoid.PlatformStand = false
+                            if player.Character:FindFirstChild("HumanoidRootPart") then
+                                player.Character.HumanoidRootPart.Anchored = false
+                            end
+                        end
+                        break
+                    end
+                end
+            end)
+        else
+             -- Turn off physics lock immediately
+             if player.Character and player.Character:FindFirstChild("Humanoid") then
+                player.Character.Humanoid.PlatformStand = false
+                if player.Character:FindFirstChild("HumanoidRootPart") then
+                    player.Character.HumanoidRootPart.Anchored = false
+                end
+            end
+        end
    end,
 })
 
 giftingToggle = GiftTab:CreateToggle({
-   Name = "Iniciar Envio",
+   Name = "Auto Gift",
    CurrentValue = false,
    Flag = "StartGiftingToggle",
    Callback = function(Value)
@@ -294,12 +386,12 @@ giftingToggle = GiftTab:CreateToggle({
         if isGifting and autoAcceptEnabled then
             autoAcceptEnabled = false
             if autoAcceptToggle then autoAcceptToggle:Set(false) end
-            Rayfield:Notify({Title = "Conflito", Content = "Auto Accept desativado para evitar bugs!", Duration = 3})
+            Rayfield:Notify({Title = "Conflito", Content = "Auto Accept desativado", Duration = 3})
         end
         
         if isGifting then
             if not selectedTargetName then
-                Rayfield:Notify({Title = "Erro", Content = "Selecione um player!", Duration = 3})
+                Rayfield:Notify({Title = "Erro", Content = "Selecione um player", Duration = 3})
                 giftingToggle:Set(false)
                 return 
             end
@@ -315,7 +407,7 @@ giftingToggle = GiftTab:CreateToggle({
 
                 -- CHECK: Zero Stock (No webhook, just stop)
                 if startTotal == 0 then
-                     Rayfield:Notify({Title = "Sem Estoque", Content = "Você não tem nenhuma Esok!", Duration = 3})
+                     Rayfield:Notify({Title = "Sem Estoque", Content = "Você não tem nenhuma Esok", Duration = 3})
                      if giftingToggle then giftingToggle:Set(false) end
                      return
                 end
@@ -330,7 +422,7 @@ giftingToggle = GiftTab:CreateToggle({
                 -- VALIDATION: Check Missing
                 if giftQuantity ~= 999 and startTotal < giftQuantity then
                     local missing = giftQuantity - startTotal
-                    Rayfield:Notify({Title = "Aviso", Content = "Faltam " .. missing .. " Esoks para a meta!", Duration = 5})
+                    Rayfield:Notify({Title = "Aviso", Content = "Faltam " .. missing .. " Esoks para a meta", Duration = 5})
                     
                     sendWebhook(
                         "Estoque Insuficiente",
@@ -353,7 +445,7 @@ giftingToggle = GiftTab:CreateToggle({
                      
                      -- Stop condition
                      if giftQuantity ~= 999 and currentTotal <= stopTarget then
-                        Rayfield:Notify({Title = "Concluido", Content = "Envio finalizado!", Duration = 3})
+                        Rayfield:Notify({Title = "Concluido", Content = "Envio finalizado", Duration = 3})
                         
                         local sentAmount = startTotal - currentTotal
                         sendWebhook(
@@ -373,7 +465,7 @@ giftingToggle = GiftTab:CreateToggle({
                      end
                      
                      if currentTotal == 0 then
-                        Rayfield:Notify({Title = "Vazio", Content = "Acabaram as Esoks!", Duration = 3})
+                        Rayfield:Notify({Title = "Vazio", Content = "Acabaram as Esoks", Duration = 3})
                         
                         local sentAmount = startTotal - currentTotal
                         sendWebhook(
