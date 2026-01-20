@@ -20,10 +20,6 @@ local VirtualUser = game:GetService("VirtualUser")
 local HttpService = game:GetService("HttpService")
 local player = Players.LocalPlayer
 
--- Forward declarations to fix scope issues
-local giftingToggle
-local autoAcceptToggle
-
 -- =========================================================================
 --                               OTHERS TAB
 -- =========================================================================
@@ -46,10 +42,7 @@ local webhookUrl = ""
 local webhookEnabled = false
 
 local function sendWebhook(title, description, color, fields)
-    if not webhookEnabled or webhookUrl == "" then 
-        warn("Webhook skipped: Disabled or Empty URL")
-        return 
-    end
+    if not webhookEnabled or webhookUrl == "" then return end
     
     local data = {
         ["embeds"] = {{
@@ -67,25 +60,13 @@ local function sendWebhook(title, description, color, fields)
     local headers = {["Content-Type"] = "application/json"}
     
     local requestFunction = http_request or request or (syn and syn.request) or (http and http.request)
-    
-    print("DEBUG: Sending Webhook...", title)
     if requestFunction then
-        local success, response = pcall(function()
-            return requestFunction({
-                Url = webhookUrl,
-                Method = "POST",
-                Headers = headers,
-                Body = jsonData
-            })
-        end)
-        
-        if success then
-            print("DEBUG: Webhook Sent! Code:", response and response.StatusCode)
-        else
-            warn("DEBUG: Webhook Failed:", response)
-        end
-    else
-        warn("DEBUG: No HTTP Request function found!")
+        requestFunction({
+            Url = webhookUrl,
+            Method = "POST",
+            Headers = headers,
+            Body = jsonData
+        })
     end
 end
 
@@ -130,20 +111,12 @@ local function fastClick(btn)
     end
 end
 
-autoAcceptToggle = AcceptTab:CreateToggle({
+AcceptTab:CreateToggle({
    Name = "Auto Accept",
    CurrentValue = false,
    Flag = "AutoAcceptToggle",
    Callback = function(Value)
         autoAcceptEnabled = Value
-        
-        -- Conflict Resolution: Turn off Gifting if enabled
-        if autoAcceptEnabled and isGifting then
-            isGifting = false
-            if giftingToggle then giftingToggle:Set(false) end
-            Rayfield:Notify({Title = "Conflito", Content = "Envio desativado para evitar bugs!", Duration = 3})
-        end
-
         if Value then
             task.spawn(function()
                 while autoAcceptEnabled do
@@ -283,19 +256,14 @@ GiftTab:CreateInput({
    end,
 })
 
+local giftingToggle -- Forward declaration
+
 giftingToggle = GiftTab:CreateToggle({
    Name = "Iniciar Envio",
    CurrentValue = false,
    Flag = "StartGiftingToggle",
    Callback = function(Value)
         isGifting = Value
-        
-        -- Conflict Resolution: Turn off Auto Accept if enabled
-        if isGifting and autoAcceptEnabled then
-            autoAcceptEnabled = false
-            if autoAcceptToggle then autoAcceptToggle:Set(false) end
-            Rayfield:Notify({Title = "Conflito", Content = "Auto Accept desativado para evitar bugs!", Duration = 3})
-        end
         
         if isGifting then
             if not selectedTargetName then
