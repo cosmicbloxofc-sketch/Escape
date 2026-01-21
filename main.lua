@@ -7,7 +7,7 @@ local Window = Rayfield:CreateWindow({
    LoadingTitle = "Loading...", 
    LoadingSubtitle = "By Cosmic Group",
    ConfigurationSaving = {
-      Enabled = true,
+      Enabled = false,
       FolderName = "ScriptTrade",
       FileName = "config"
    },
@@ -206,7 +206,7 @@ local function isEsok(tool)
     return false
 end
 
--- FLY FUNCTION (Copied & Adapted)
+-- FLY FUNCTION (BodyVelocity)
 local function flyTo(targetPlayer)
     local myChar = player.Character
     if not myChar then return end
@@ -214,35 +214,39 @@ local function flyTo(targetPlayer)
     local myHRP = myChar:FindFirstChild("HumanoidRootPart")
     local myHum = myChar:FindFirstChild("Humanoid")
     
-    if targetPlayer and targetPlayer.Character and myHRP then
+    if targetPlayer and targetPlayer.Character and myHRP and myHum then
         local targetHRP = targetPlayer.Character:FindFirstChild("HumanoidRootPart")
         if targetHRP then
-            -- Enable PlatformStand and Anchor to stay still in air
-            if myHum then myHum.PlatformStand = true end
-            myHRP.Anchored = true
+            -- Physics setup
+            myHum.PlatformStand = true
+            myHRP.Anchored = false 
             
-            local targetCFrame = targetHRP.CFrame * CFrame.new(0, 7, 0) -- High above player
-            local distance = (myHRP.Position - targetHRP.Position).Magnitude
+            -- BodyVelocity
+            local bv = myHRP:FindFirstChild("FlyVelocity") or Instance.new("BodyVelocity")
+            bv.Name = "FlyVelocity"
+            bv.Parent = myHRP
+            bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
             
-            -- Speed Calculation (fast follow)
-            local speed = 150 
-            local time = distance / speed
-            if time < 0.1 then time = 0.1 end 
+            -- BodyGyro
+            local bg = myHRP:FindFirstChild("FlyGyro") or Instance.new("BodyGyro")
+            bg.Name = "FlyGyro"
+            bg.Parent = myHRP
+            bg.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
+            bg.D = 100
+            bg.P = 10000 
             
-            local tweenInfo = TweenInfo.new(
-                time,
-                Enum.EasingStyle.Linear,
-                Enum.EasingDirection.Out
-            )
+            -- Move Info
+            local targetPos = targetHRP.Position + Vector3.new(0, 5, 0) -- Above player
+            local vec = targetPos - myHRP.Position
+            local dist = vec.Magnitude
+            local speed = 150 -- Fly Speed
             
-            local tween = TweenService:Create(myHRP, tweenInfo, {CFrame = targetCFrame})
-            tween:Play()
-            
-            -- Restore physics if needed (managed by loop usually)
-            task.spawn(function()
-                task.wait(time)
-                -- Only disable if we stopped following or fly finished (handled by toggle potentially)
-            end)
+            if dist > 3 then
+                bv.Velocity = vec.Unit * speed
+            else
+                bv.Velocity = Vector3.new(0,0,0) -- Stop if close
+            end
+            bg.CFrame = CFrame.new(myHRP.Position, targetPos)
         end
     end
 end
@@ -332,45 +336,49 @@ GiftTab:CreateToggle({
    Name = "Seguir Player",
    CurrentValue = false,
    Flag = "FollowPlayerToggle",
-   Callback = function(Value)
+    Callback = function(Value)
         followEnabled = Value
         
+        -- Cleanup Function
+        local function cleanFly()
+             if player.Character then
+                local hum = player.Character:FindFirstChild("Humanoid")
+                local hrp = player.Character:FindFirstChild("HumanoidRootPart")
+                if hum then hum.PlatformStand = false end
+                if hrp then
+                    hrp.Anchored = false
+                    local bv = hrp:FindFirstChild("FlyVelocity")
+                    if bv then bv:Destroy() end
+                    local bg = hrp:FindFirstChild("FlyGyro")
+                    if bg then bg:Destroy() end
+                    hrp.Velocity = Vector3.new(0,0,0)
+                end
+             end
+        end
+
         if followEnabled then
             if not selectedTargetName then
                 Rayfield:Notify({Title = "Erro", Content = "Selecione um player", Duration = 3})
-                -- Note: Can't easily auto-turn off without variable, but functionality stops anyway
                 return
             end
             
             task.spawn(function()
                 while followEnabled do
                     local target = Players:FindFirstChild(selectedTargetName)
+                    -- If target left or char missing, we wait
                     if target and target.Character then
                         flyTo(target)
                     end
-                    -- Fast check for smooth following
-                    task.wait(0.1) 
+                    task.wait() -- Fast update for physics
                     
                     if not followEnabled then
-                        -- Restore physics when stopped
-                        if player.Character and player.Character:FindFirstChild("Humanoid") then
-                            player.Character.Humanoid.PlatformStand = false
-                            if player.Character:FindFirstChild("HumanoidRootPart") then
-                                player.Character.HumanoidRootPart.Anchored = false
-                            end
-                        end
+                        cleanFly()
                         break
                     end
                 end
             end)
         else
-             -- Turn off physics lock immediately
-             if player.Character and player.Character:FindFirstChild("Humanoid") then
-                player.Character.Humanoid.PlatformStand = false
-                if player.Character:FindFirstChild("HumanoidRootPart") then
-                    player.Character.HumanoidRootPart.Anchored = false
-                end
-            end
+             cleanFly()
         end
    end,
 })
@@ -506,9 +514,7 @@ giftingToggle = GiftTab:CreateToggle({
                                      if targetHRP then
                                          local tradePrompt = targetHRP:FindFirstChild("TradePrompt")
                                          if tradePrompt then
-                                             tradePrompt:InputHoldBegin()
-                                             task.wait(tradePrompt.HoldDuration)
-                                             tradePrompt:InputHoldEnd()
+                                             fireproximityprompt(tradePrompt)
                                          end
                                      end
                                  end
@@ -528,9 +534,7 @@ giftingToggle = GiftTab:CreateToggle({
                                         if targetHRP then
                                             local tradePrompt = targetHRP:FindFirstChild("TradePrompt")
                                             if tradePrompt then
-                                                tradePrompt:InputHoldBegin()
-                                                task.wait(tradePrompt.HoldDuration)
-                                                tradePrompt:InputHoldEnd()
+                                                fireproximityprompt(tradePrompt)
                                             end
                                         end
                                     end
