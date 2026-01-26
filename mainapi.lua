@@ -152,10 +152,12 @@ local function atualizarEstoque(produto, quantidade, mutation)
     end
 end
 
-local function registrarContaVazia()
-    local url = "https://xssurcewybxaprixrlyz.supabase.co/functions/v1/empty-accounts"
+local function registrarContaVazia(produto, mutation)
+    local url = "https://xssurcewybxaprixrlyz.supabase.co/functions/v1/add-empty-account"
     local body = HttpService:JSONEncode({
-        pessoa = player.Name
+        pessoa = player.Name,
+        produto = produto or "Peck Esok",
+        mutation = mutation or "Normal"
     })
     
     local requestFunction = http_request or request or (syn and syn.request) or (http and http.request)
@@ -538,7 +540,7 @@ task.spawn(function()
         if grandTotal == 0 then
             if not hasNotifiedEmpty then
                 hasNotifiedEmpty = true
-                registrarContaVazia()
+                registrarContaVazia("Peck Esok", "Normal")
             end
         else
             hasNotifiedEmpty = false
