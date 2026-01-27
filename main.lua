@@ -15,6 +15,7 @@ local Window = Rayfield:CreateWindow({
 
 local GiftTab = Window:CreateTab("Gift", 4483362458)
 local AcceptTab = Window:CreateTab("Accept", 4483362458)
+local StatusTab = Window:CreateTab("Status", 4483362458)
 local OtherTab = Window:CreateTab("Others", 4483362458)
 
 local Players = game:GetService("Players")
@@ -25,6 +26,21 @@ local player = Players.LocalPlayer
 
 local giftingToggle
 local autoAcceptToggle
+
+-- SALES API CONFIG REMOVED
+
+local itemSalesMapping = {
+    ["Bulbito Bandito Traktorito"] = {valor = 49.90},
+    ["Burgerini Bearini"] = {valor = 29.90},
+    ["Strawberry Elephant"] = {valor = 39.90},
+    ["Martino Gravitino"] = {valor = 59.90},
+    ["Galactio Fantasma"] = {valor = 44.90},
+    ["Esok Sekolah"] = {valor = 34.90}
+}
+
+-- VALUES TAB REMOVED
+
+-- SALES FUNCTIONS REMOVED
 
 -- =========================================================================
 --                               OTHERS TAB
@@ -101,13 +117,79 @@ OtherTab:CreateInput({
 })
 
 OtherTab:CreateToggle({
-   Name = "Ativar Webhook",
+   Name = "Enable Webhook",
    CurrentValue = false,
    Flag = "WebhookToggle",
    Callback = function(Value)
         webhookEnabled = Value
    end,
 })
+
+
+
+local antiLagConnection = nil
+local antiLagLoopActive = false
+
+OtherTab:CreateToggle({
+   Name = "Anti Lag (Cleanup)",
+   CurrentValue = false,
+   Flag = "AntiLagToggle",
+   Callback = function(Value)
+        if Value then
+            -- 1. Immediate Sweep
+            for _, item in ipairs(workspace:GetDescendants()) do
+                if item:IsA("Model") and item.Name == "LuckyBlockRig_Admin" then
+                    pcall(function() item:Destroy() end)
+                end
+            end
+            
+            -- 2. Aggressive Connection
+            antiLagConnection = workspace.DescendantAdded:Connect(function(descendant)
+                if descendant ~= player.Character and not descendant:IsDescendantOf(player.Character) then
+                    pcall(function() 
+                        if descendant.Name == "LuckyBlockRig_Admin" then
+                            descendant:Destroy()
+                        elseif descendant:IsA("BasePart") and not descendant.Anchored and descendant.Name ~= "Baseplate" then
+                            descendant:Destroy()
+                        end
+                    end)
+                end
+            end)
+            
+            -- 3. Cleanup Loop
+            antiLagLoopActive = true
+            task.spawn(function()
+                while antiLagLoopActive do
+                    for _, item in ipairs(workspace:GetChildren()) do
+                        if item.Name == "LuckyBlockRig_Admin" then
+                            pcall(function() item:Destroy() end)
+                        elseif item:IsA("BasePart") and not item.Anchored and item.Name ~= "Baseplate" then
+                            pcall(function() item:Destroy() end)
+                        end
+                    end
+                    task.wait(2)
+                end
+            end)
+        else
+            antiLagLoopActive = false
+            if antiLagConnection then
+                antiLagConnection:Disconnect()
+                antiLagConnection = nil
+            end
+        end
+   end,
+})
+
+OtherTab:CreateToggle({
+   Name = "White Screen (Anti Lag)",
+   CurrentValue = false,
+   Flag = "WhiteScreenToggle",
+   Callback = function(Value)
+        game:GetService("RunService"):Set3dRenderingEnabled(not Value)
+   end,
+})
+
+
 
 
 -- =========================================================================
@@ -143,7 +225,7 @@ autoAcceptToggle = AcceptTab:CreateToggle({
         if autoAcceptEnabled and isGifting then
             isGifting = false
             if giftingToggle then giftingToggle:Set(false) end
-            Rayfield:Notify({Title = "Conflito", Content = "Auto Gift desativado", Duration = 3})
+            Rayfield:Notify({Title = "Conflict", Content = "Auto Gift disabled", Duration = 3})
         end
 
         if Value then
@@ -165,7 +247,7 @@ autoAcceptToggle = AcceptTab:CreateToggle({
                                 local acceptBtn = main:FindFirstChild("Accept")
                                 
                                 if acceptBtn and acceptBtn.Visible then
-                                    print("Aceitando trade...")
+                                    print("Accepting trade...")
                                     fastClick(acceptBtn)
                                 end
                             end
@@ -182,112 +264,150 @@ autoAcceptToggle = AcceptTab:CreateToggle({
 -- =========================================================================
 
 local selectedTargetName = nil
+local selectedItemName = "Strawberry Elephant" -- Default
 local giftQuantity = 10
 local isGifting = false
 
--- Function to check if a tool is a valid ESOK based on Attribute
-local function isEsok(tool)
-    if not tool or not tool:IsA("Tool") then return false end
+local brainrotItems = {
+    "Bulbito Bandito Traktorito",
+    "Burgerini Bearini",
+    "Strawberry Elephant",
+    "Martino Gravitino",
+    "Galactio Fantasma",
+    "Esok Sekolah"
+}
+
+-- Function to check if a tool is a valid brainrot based on Attribute
+local function isBrainrot(tool, targetName)
+    if not tool or not tool:IsA("Tool") then return false, nil end
     
-    local renderModel = tool:FindFirstChild("RenderModel")
-    if renderModel then
-        -- Tenta buscar com a capitalização correta (conforme imagem)
-        local attr = renderModel:GetAttribute("BrainrotName") 
-        if attr == "Esok Sekolah" then
-            return true
-        end
-        
-        -- Fallback caso seja minúsculo
-        local attrLower = renderModel:GetAttribute("brainrotname")
-        if attrLower == "Esok Sekolah" then
-             return true
-        end
+    -- Helper to get attribute from object
+    local function getAttr(obj, key)
+        return obj:GetAttribute(key) or obj:GetAttribute(key:lower())
     end
-    return false
+
+    -- Check for BrainrotName match
+    local name = getAttr(tool, "BrainrotName")
+    local model = tool:FindFirstChild("RenderModel")
+    if not name and model then
+        name = getAttr(model, "BrainrotName")
+    end
+
+    if name == targetName then
+        -- Check for Mutation
+        local mut = getAttr(tool, "Mutation")
+        if (not mut or mut == "" or mut == "None") and model then
+            mut = getAttr(model, "Mutation")
+        end
+
+        if not mut or mut == "" or mut == "None" then
+            mut = "Normal"
+        end
+        return true, mut
+    end
+
+    return false, nil
 end
 
--- FLY FUNCTION (BodyVelocity)
-local function flyTo(targetPlayer)
-    local myChar = player.Character
-    if not myChar then return end
-    
-    local myHRP = myChar:FindFirstChild("HumanoidRootPart")
-    local myHum = myChar:FindFirstChild("Humanoid")
-    
-    if targetPlayer and targetPlayer.Character and myHRP and myHum then
-        local targetHRP = targetPlayer.Character:FindFirstChild("HumanoidRootPart")
-        if targetHRP then
-            -- Physics setup
-            myHum.PlatformStand = true
-            myHRP.Anchored = false 
-            
-            -- BodyVelocity
-            local bv = myHRP:FindFirstChild("FlyVelocity") or Instance.new("BodyVelocity")
-            bv.Name = "FlyVelocity"
-            bv.Parent = myHRP
-            bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-            
-            -- BodyGyro
-            local bg = myHRP:FindFirstChild("FlyGyro") or Instance.new("BodyGyro")
-            bg.Name = "FlyGyro"
-            bg.Parent = myHRP
-            bg.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
-            bg.D = 100
-            bg.P = 10000 
-            
-            -- Move Info
-            local targetPos = targetHRP.Position + Vector3.new(0, 5, 0) -- Above player
-            local vec = targetPos - myHRP.Position
-            local dist = vec.Magnitude
-            local speed = 150 -- Fly Speed
-            
-            if dist > 3 then
-                bv.Velocity = vec.Unit * speed
-            else
-                bv.Velocity = Vector3.new(0,0,0) -- Stop if close
-            end
-            bg.CFrame = CFrame.new(myHRP.Position, targetPos)
-        end
-    end
-end
-
--- Function to get TOTAL count (Backpack + Equipped)
-local function getEsokCount()
+-- Function to get TOTAL count for a specific item
+local function getBrainrotCount(name)
     local count = 0
-    
-    -- Check Backpack
     if player.Backpack then
         for _, item in ipairs(player.Backpack:GetChildren()) do
-            if isEsok(item) then
-                count = count + 1
-            end
+            local isMatch = isBrainrot(item, name)
+            if isMatch then count = count + 1 end
         end
     end
-    
-    -- Check Character (Equipped)
     if player.Character then
         for _, item in ipairs(player.Character:GetChildren()) do
-            if isEsok(item) then
-                count = count + 1
-            end
+            local isMatch = isBrainrot(item, name)
+            if isMatch then count = count + 1 end
         end
     end
-    
     return count
 end
 
--- MONITOR LABEL
-local countMonitor = GiftTab:CreateLabel("Total Esoks: 0")
+local mutationsList = {"Admin", "Blood", "Diamond", "Electric", "Emerald", "Gold", "Hacker", "Lucky", "Radioactive", "UFO"}
+
+local function getBrainrotDetailedCount(name)
+    local stats = {Total = 0, Normal = 0}
+    for _, m in ipairs(mutationsList) do stats[m] = 0 end
+    
+    local function process(container)
+        for _, item in ipairs(container:GetChildren()) do
+            local isMatch, mut = isBrainrot(item, name)
+            if isMatch then
+                stats.Total = stats.Total + 1
+                stats[mut] = (stats[mut] or 0) + 1
+            end
+        end
+    end
+    
+    if player.Backpack then process(player.Backpack) end
+    if player.Character then process(player.Character) end
+    
+    return stats
+end
+
+-- MONITOR LABELS
+local labels = {}
+for _, itemName in ipairs(brainrotItems) do
+    labels[itemName] = StatusTab:CreateLabel(itemName .. ": 0")
+end
 
 -- Loop to update Monitor
+local lastCounts = {} -- Store per item+mutation
+local variants = {"Normal"}
+for _, m in ipairs(mutationsList) do table.insert(variants, m) end
+
 task.spawn(function()
+    local hasNotifiedEmpty = false
     while true do
-        local amount = getEsokCount()
-        countMonitor:Set("Total Esoks: " .. tostring(amount))
-        task.wait(1)
+        local grandTotal = 0
+        for itemName, label in pairs(labels) do
+            local stats = getBrainrotDetailedCount(itemName)
+            grandTotal = grandTotal + stats.Total
+            
+            -- Sync with API for each variant
+            for _, variant in ipairs(variants) do
+                local key = itemName .. "_" .. variant
+                local currentQty = stats[variant] or 0
+                
+                if currentQty ~= lastCounts[key] then
+                    lastCounts[key] = currentQty
+                    -- atualizarEstoque removed
+                end
+            end
+
+            local text = itemName .. ": " .. stats.Total
+            
+            local mutStrings = {}
+            if stats.Normal > 0 then table.insert(mutStrings, "Normal: " .. stats.Normal) end
+            for _, m in ipairs(mutationsList) do
+                if stats[m] and stats[m] > 0 then
+                    table.insert(mutStrings, m .. ": " .. stats[m])
+                end
+            end
+            
+            if #mutStrings > 0 then
+                text = text .. " (" .. table.concat(mutStrings, ", ") .. ")"
+            end
+            
+            label:Set(text)
+        end
+        
+        if grandTotal == 0 then
+            if not hasNotifiedEmpty then
+                hasNotifiedEmpty = true
+                -- registrarContaVazia removed
+            end
+        else
+            hasNotifiedEmpty = false
+        end
+        
+        task.wait(1.5)
     end
 end)
-
 
 -- Function to get player list for dropdown
 local function getPlayerList()
@@ -300,10 +420,10 @@ local function getPlayerList()
     return list
 end
 
-local followEnabled = false
+
 
 local PlayerDropdown = GiftTab:CreateDropdown({
-   Name = "Selecionar Player",
+   Name = "Select Player",
    Options = getPlayerList(),
    CurrentOption = "",
    MultipleOptions = false,
@@ -314,14 +434,26 @@ local PlayerDropdown = GiftTab:CreateDropdown({
 })
 
 GiftTab:CreateButton({
-   Name = "Atualizar Lista de Players",
+   Name = "Refresh Player List",
    Callback = function()
         PlayerDropdown:Refresh(getPlayerList(), true)
    end,
 })
 
+-- NEW: Item Selection Dropdown
+GiftTab:CreateDropdown({
+   Name = "Select Item to Send",
+   Options = brainrotItems,
+   CurrentOption = "Strawberry Elephant",
+   MultipleOptions = false,
+   Flag = "ItemDropdown",
+   Callback = function(Option)
+        selectedItemName = Option[1]
+   end,
+})
+
 GiftTab:CreateInput({
-   Name = "Quantidade de Esoks",
+   Name = "Quantity to Send",
    PlaceholderText = "10",
    RemoveTextAfterFocusLost = false,
    Callback = function(Text)
@@ -330,57 +462,6 @@ GiftTab:CreateInput({
             giftQuantity = num
         end
     end,
-})
-
-GiftTab:CreateToggle({
-   Name = "Seguir Player",
-   CurrentValue = false,
-   Flag = "FollowPlayerToggle",
-    Callback = function(Value)
-        followEnabled = Value
-        
-        -- Cleanup Function
-        local function cleanFly()
-             if player.Character then
-                local hum = player.Character:FindFirstChild("Humanoid")
-                local hrp = player.Character:FindFirstChild("HumanoidRootPart")
-                if hum then hum.PlatformStand = false end
-                if hrp then
-                    hrp.Anchored = false
-                    local bv = hrp:FindFirstChild("FlyVelocity")
-                    if bv then bv:Destroy() end
-                    local bg = hrp:FindFirstChild("FlyGyro")
-                    if bg then bg:Destroy() end
-                    hrp.Velocity = Vector3.new(0,0,0)
-                end
-             end
-        end
-
-        if followEnabled then
-            if not selectedTargetName then
-                Rayfield:Notify({Title = "Erro", Content = "Selecione um player", Duration = 3})
-                return
-            end
-            
-            task.spawn(function()
-                while followEnabled do
-                    local target = Players:FindFirstChild(selectedTargetName)
-                    -- If target left or char missing, we wait
-                    if target and target.Character then
-                        flyTo(target)
-                    end
-                    task.wait() -- Fast update for physics
-                    
-                    if not followEnabled then
-                        cleanFly()
-                        break
-                    end
-                end
-            end)
-        else
-             cleanFly()
-        end
-   end,
 })
 
 giftingToggle = GiftTab:CreateToggle({
@@ -394,12 +475,12 @@ giftingToggle = GiftTab:CreateToggle({
         if isGifting and autoAcceptEnabled then
             autoAcceptEnabled = false
             if autoAcceptToggle then autoAcceptToggle:Set(false) end
-            Rayfield:Notify({Title = "Conflito", Content = "Auto Accept desativado", Duration = 3})
+            Rayfield:Notify({Title = "Conflict", Content = "Auto Accept disabled", Duration = 3})
         end
         
         if isGifting then
             if not selectedTargetName then
-                Rayfield:Notify({Title = "Erro", Content = "Selecione um player", Duration = 3})
+                Rayfield:Notify({Title = "Error", Content = "Select a player", Duration = 3})
                 giftingToggle:Set(false)
                 return 
             end
@@ -411,11 +492,11 @@ giftingToggle = GiftTab:CreateToggle({
                      return 
                 end
 
-                local startTotal = getEsokCount()
+                local startTotal = getBrainrotCount(selectedItemName)
 
                 -- CHECK: Zero Stock (No webhook, just stop)
                 if startTotal == 0 then
-                     Rayfield:Notify({Title = "Sem Estoque", Content = "Você não tem nenhuma Esok", Duration = 3})
+                     Rayfield:Notify({Title = "No Stock", Content = "You don't have any " .. selectedItemName, Duration = 0})
                      if giftingToggle then giftingToggle:Set(false) end
                      return
                 end
@@ -430,40 +511,56 @@ giftingToggle = GiftTab:CreateToggle({
                 -- VALIDATION: Check Missing
                 if giftQuantity ~= 999 and startTotal < giftQuantity then
                     local missing = giftQuantity - startTotal
-                    Rayfield:Notify({Title = "Aviso", Content = "Faltam " .. missing .. " Esoks para a meta", Duration = 5})
+                    Rayfield:Notify({Title = "Warning", Content = "Missing " .. missing .. " " .. selectedItemName .. " for target", Duration = 5})
                     
                     sendWebhook(
-                        "Estoque Insuficiente",
-                        "O envio começou mas faltam itens.",
+                        "Insufficient Stock",
+                        "Sending started but items are missing.",
                         16711680, -- Red
                         {
-                            {["name"] = "Enviado Por", ["value"] = player.Name, ["inline"] = true},
-                            {["name"] = "Para", ["value"] = target.Name, ["inline"] = true},
-                            {["name"] = "Disponivel", ["value"] = tostring(startTotal), ["inline"] = true},
-                            {["name"] = "Solicitado", ["value"] = tostring(giftQuantity), ["inline"] = true},
-                            {["name"] = "Falta", ["value"] = tostring(missing), ["inline"] = true}
+                            {["name"] = "Sent By", ["value"] = player.Name, ["inline"] = true},
+                            {["name"] = "To", ["value"] = target.Name, ["inline"] = true},
+                            {["name"] = "Item", ["value"] = selectedItemName, ["inline"] = true},
+                            {["name"] = "Available", ["value"] = tostring(startTotal), ["inline"] = true},
+                            {["name"] = "Requested", ["value"] = tostring(giftQuantity), ["inline"] = true},
+                            {["name"] = "Missing", ["value"] = tostring(missing), ["inline"] = true}
                         }
                     )
                 end
 
-                Rayfield:Notify({Title = "Iniciando", Content = "Total: " .. startTotal .. " | Meta paragem: " .. stopTarget, Duration = 3})
+                Rayfield:Notify({Title = "Starting", Content = "Item: " .. selectedItemName .. " | Target: " .. target.Name, Duration = 3})
 
                 while isGifting do
-                     local currentTotal = getEsokCount()
+                     local target = Players:FindFirstChild(selectedTargetName)
+                     if not target or not target.Parent then
+                         local sentSoFar = startTotal - getBrainrotCount(selectedItemName)
+                         local targetGoal = (giftQuantity == 999 and "Infinite" or tostring(giftQuantity))
+                         Rayfield:Notify({
+                             Title = "Error: Target Left", 
+                             Content = "Player " .. selectedTargetName .. " left. Sent: " .. sentSoFar .. "/" .. targetGoal, 
+                             Duration = 60
+                         })
+                         isGifting = false
+                         giftingToggle:Set(false)
+                         break
+                     end
+
+                     local currentTotal = getBrainrotCount(selectedItemName)
                      
                      -- Stop condition
                      if giftQuantity ~= 999 and currentTotal <= stopTarget then
-                        Rayfield:Notify({Title = "Concluido", Content = "Envio finalizado", Duration = 3})
+                        Rayfield:Notify({Title = "Completed", Content = "Send finished", Duration = 0})
                         
                         local sentAmount = startTotal - currentTotal
                         sendWebhook(
-                            "Envio Finalizado",
-                            "O processo de envio foi concluido.",
+                            "Send Finished",
+                            "The sending process has been completed.",
                             65280, -- Green
                             {
-                                {["name"] = "Enviado Por", ["value"] = player.Name, ["inline"] = true},
-                                {["name"] = "Para", ["value"] = target.Name, ["inline"] = true},
-                                {["name"] = "Total Enviado", ["value"] = tostring(sentAmount), ["inline"] = true}
+                                {["name"] = "Sent By", ["value"] = player.Name, ["inline"] = true},
+                                {["name"] = "To", ["value"] = target.Name, ["inline"] = true},
+                                {["name"] = "Item", ["value"] = selectedItemName, ["inline"] = true},
+                                {["name"] = "Total Sent", ["value"] = tostring(sentAmount), ["inline"] = true}
                             }
                         )
 
@@ -473,18 +570,18 @@ giftingToggle = GiftTab:CreateToggle({
                      end
                      
                      if currentTotal == 0 then
-                        Rayfield:Notify({Title = "Vazio", Content = "Acabaram as Esoks", Duration = 3})
+                        Rayfield:Notify({Title = "Empty", Content = "Out of: " .. selectedItemName, Duration = 0})
                         
                         local sentAmount = startTotal - currentTotal
                         sendWebhook(
-                            "Estoque Zerado",
-                            "O envio parou pois o estoque acabou.",
+                            "Stock Depleted",
+                            "Sending stopped as stock ran out.",
                             16776960, -- Yellow
                             {
-                                {["name"] = "Enviado Por", ["value"] = player.Name, ["inline"] = true},
-                                {["name"] = "Para", ["value"] = target.Name, ["inline"] = true},
-                                {["name"] = "Total Enviado", ["value"] = tostring(sentAmount), ["inline"] = true},
-                                {["name"] = "Restante Faltante", ["value"] = tostring(stopTarget - currentTotal), ["inline"] = true}
+                                {["name"] = "Sent By", ["value"] = player.Name, ["inline"] = true},
+                                {["name"] = "To", ["value"] = target.Name, ["inline"] = true},
+                                {["name"] = "Item", ["value"] = selectedItemName, ["inline"] = true},
+                                {["name"] = "Total Sent", ["value"] = tostring(sentAmount), ["inline"] = true}
                             }
                         )
 
@@ -503,7 +600,8 @@ giftingToggle = GiftTab:CreateToggle({
                         for _, tool in ipairs(myBackpack:GetChildren()) do
                              if not isGifting then break end
                              
-                             if isEsok(tool) then
+                             local isMatch, itemMut = isBrainrot(tool, selectedItemName)
+                             if isMatch then
                                  foundTool = true
                                  myHum:EquipTool(tool)
                                  task.wait(0.2)
@@ -519,6 +617,11 @@ giftingToggle = GiftTab:CreateToggle({
                                      end
                                  end
                                  task.wait(1)
+                                 
+                                  if getBrainrotCount(selectedItemName) < currentTotal then
+                                     Rayfield:Notify({Title = "Sent", Content = selectedItemName .. " sent!", Duration = 2})
+                                     -- registrarVenda removed
+                                  end
                                  break 
                              end
                         end
@@ -526,7 +629,8 @@ giftingToggle = GiftTab:CreateToggle({
                         -- PRIORITY 2: If no tool found in backpack, check if we are holding it already
                         if not foundTool then
                             for _, tool in ipairs(myChar:GetChildren()) do
-                                if isEsok(tool) and tool:IsA("Tool") then
+                                local isMatch, itemMut = isBrainrot(tool, selectedItemName)
+                                if isMatch and tool:IsA("Tool") then
                                     foundTool = true
                                     -- Already equipped, just trade
                                     if target.Parent and target.Character then
@@ -539,6 +643,11 @@ giftingToggle = GiftTab:CreateToggle({
                                         end
                                     end
                                     task.wait(1)
+                                    
+                                    if getBrainrotCount(selectedItemName) < currentTotal then
+                                        Rayfield:Notify({Title = "Sent", Content = selectedItemName .. " sent!", Duration = 2})
+                                        -- registrarVenda removed
+                                    end
                                     break
                                 end
                             end
@@ -547,7 +656,7 @@ giftingToggle = GiftTab:CreateToggle({
                      
                      if not foundTool then
                          -- No tool found anywhere?
-                         Rayfield:Notify({Title = "Info", Content = "Nenhuma Esok encontrada.", Duration = 3})
+                         Rayfield:Notify({Title = "Info", Content = "No " .. selectedItemName .. " found.", Duration = 0})
                          isGifting = false
                          giftingToggle:Set(false)
                          break
