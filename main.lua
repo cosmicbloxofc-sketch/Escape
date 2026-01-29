@@ -16,18 +16,33 @@ local Window = Rayfield:CreateWindow({
 local GiftTab = Window:CreateTab("Gift", 4483362458)
 local AcceptTab = Window:CreateTab("Accept", 4483362458)
 local StatusTab = Window:CreateTab("Status", 4483362458)
+local HistoryTab = Window:CreateTab("History", 4483362458)
 local OtherTab = Window:CreateTab("Others", 4483362458)
 
 local Players = game:GetService("Players")
 local VirtualUser = game:GetService("VirtualUser")
 local HttpService = game:GetService("HttpService")
 local TweenService = game:GetService("TweenService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local player = Players.LocalPlayer
+
+-- Carregar módulos internos do jogo (Novo Modelo)
+local Net = require(ReplicatedStorage:WaitForChild("Packages"):WaitForChild("Net"))
+local ClientGlobals = require(ReplicatedStorage:WaitForChild("Client"):WaitForChild("Modules"):WaitForChild("ClientGlobals"))
+
+local PlayerData = ClientGlobals.PlayerData
+local ActiveTrade = ClientGlobals.ActiveTrade
+local TradeRequests = ClientGlobals.TradeRequests
 
 local giftingToggle
 local autoAcceptToggle
 
--- SALES API CONFIG REMOVED
+local totalSentInSession = 0 -- Contador global para a sessão atual
+
+local function addHistoryLog(title, content, color)
+    HistoryTab:CreateSection(title)
+    HistoryTab:CreateLabel(content)
+end
 
 local itemSalesMapping = {
     ["Bulbito Bandito Traktorito"] = {valor = 49.90},
@@ -231,28 +246,47 @@ autoAcceptToggle = AcceptTab:CreateToggle({
         if Value then
             task.spawn(function()
                 while autoAcceptEnabled do
-                    task.wait(0.5)
-                    pcall(function()
-                         -- 1. Unequip All Tools
-                        if player.Character and player.Character:FindFirstChild("Humanoid") then
-                            player.Character.Humanoid:UnequipTools()
-                        end
+                    -- 1. Aceitar Pedidos via Remote (script-accept.lua mode)
+                    local requests = TradeRequests:TryIndex({}) or {}
+                    for requestId, data in pairs(requests) do
+                        pcall(function()
+                            Net:RemoteFunction("Trade.RespondToTradeOffer"):InvokeServer(requestId, true)
+                        end)
+                    end
 
-                        -- 2. Check for Trade Request
+                    -- 2. Confirmar Troca Automática (Ready) com Resiliência
+                    local guid = ActiveTrade:TryIndex({"guid"})
+                    if guid then
+                        local isReady = ActiveTrade:TryIndex({"player1", "ready"})
+                        if not isReady then
+                            -- Verifica a trava de 3 segundos
+                            local lastUpdate = ActiveTrade:TryIndex({"timers", "lastUpdate"}) or 0
+                            local serverTime = workspace:GetServerTimeNow()
+                            
+                            if serverTime > (lastUpdate + 3.1) then
+                                pcall(function()
+                                    Net:RemoteEvent("Trade.ReadyTrade"):FireServer(true)
+                                end)
+                            end
+                        end
+                    end
+
+                    -- MANTÉM LÓGICA ANTIGA (UI CLICK) COMO BACKUP
+                    pcall(function()
                         local playerGui = player:WaitForChild("PlayerGui", 2)
                         if playerGui then
                             local tradeRequest = playerGui:FindFirstChild("TradeRequest")
                             if tradeRequest and tradeRequest:FindFirstChild("Main") then
                                 local main = tradeRequest.Main
                                 local acceptBtn = main:FindFirstChild("Accept")
-                                
                                 if acceptBtn and acceptBtn.Visible then
-                                    print("Accepting trade...")
                                     fastClick(acceptBtn)
                                 end
                             end
                         end
                     end)
+                    
+                    task.wait(1)
                 end
             end)
         end
@@ -486,183 +520,151 @@ giftingToggle = GiftTab:CreateToggle({
             end
 
             task.spawn(function()
-                local target = Players:FindFirstChild(selectedTargetName)
-                if not target then 
-                     giftingToggle:Set(false)
-                     return 
-                end
-
-                local startTotal = getBrainrotCount(selectedItemName)
-
-                -- CHECK: Zero Stock (No webhook, just stop)
-                if startTotal == 0 then
-                     Rayfield:Notify({Title = "No Stock", Content = "You don't have any " .. selectedItemName, Duration = 0})
-                     if giftingToggle then giftingToggle:Set(false) end
-                     return
-                end
-
-                local stopTarget = startTotal - giftQuantity
-                if stopTarget < 0 then stopTarget = 0 end 
-
-                if giftQuantity == 999 then
-                    stopTarget = -1 
-                end
+                local itemJaAdicionado = false
+                totalSentInSession = 0 -- Reseta ao iniciar novo envio
                 
-                -- VALIDATION: Check Missing
-                if giftQuantity ~= 999 and startTotal < giftQuantity then
-                    local missing = giftQuantity - startTotal
-                    Rayfield:Notify({Title = "Warning", Content = "Missing " .. missing .. " " .. selectedItemName .. " for target", Duration = 5})
-                    
-                    sendWebhook(
-                        "Insufficient Stock",
-                        "Sending started but items are missing.",
-                        16711680, -- Red
-                        {
-                            {["name"] = "Sent By", ["value"] = player.Name, ["inline"] = true},
-                            {["name"] = "To", ["value"] = target.Name, ["inline"] = true},
-                            {["name"] = "Item", ["value"] = selectedItemName, ["inline"] = true},
-                            {["name"] = "Available", ["value"] = tostring(startTotal), ["inline"] = true},
-                            {["name"] = "Requested", ["value"] = tostring(giftQuantity), ["inline"] = true},
-                            {["name"] = "Missing", ["value"] = tostring(missing), ["inline"] = true}
-                        }
-                    )
+                addHistoryLog("Sessão Iniciada", "Iniciando envio para: " .. selectedTargetName .. "\nObjetivo: " .. (giftQuantity == 999 and "Infinito" or giftQuantity) .. " itens.", Color3.fromRGB(0, 255, 255))
+
+                -- Função interna para achar IDs e Mutações
+                local function findItemData(itemName)
+                    local data = {}
+                    local inventory = PlayerData:TryIndex({"Inventory"}) or {}
+                    for id, item in pairs(inventory) do
+                        if item.name == itemName or (item.sub and item.sub.mutation == itemName) then
+                            local mutation = "Normal"
+                            if item.sub and item.sub.mutation and item.sub.mutation ~= "" and item.sub.mutation ~= "None" then
+                                mutation = item.sub.mutation
+                            end
+                            table.insert(data, {id = id, mutation = mutation})
+                        end
+                    end
+                    return data
                 end
 
-                Rayfield:Notify({Title = "Starting", Content = "Item: " .. selectedItemName .. " | Target: " .. target.Name, Duration = 3})
+                local lastInventoryCount = getBrainrotCount(selectedItemName)
 
                 while isGifting do
-                     local target = Players:FindFirstChild(selectedTargetName)
-                     if not target or not target.Parent then
-                         local sentSoFar = startTotal - getBrainrotCount(selectedItemName)
-                         local targetGoal = (giftQuantity == 999 and "Infinite" or tostring(giftQuantity))
-                         Rayfield:Notify({
-                             Title = "Error: Target Left", 
-                             Content = "Player " .. selectedTargetName .. " left. Sent: " .. sentSoFar .. "/" .. targetGoal, 
-                             Duration = 60
-                         })
-                         isGifting = false
-                         giftingToggle:Set(false)
-                         break
-                     end
-
-                     local currentTotal = getBrainrotCount(selectedItemName)
-                     
-                     -- Stop condition
-                     if giftQuantity ~= 999 and currentTotal <= stopTarget then
-                        Rayfield:Notify({Title = "Completed", Content = "Send finished", Duration = 0})
-                        
-                        local sentAmount = startTotal - currentTotal
-                        sendWebhook(
-                            "Send Finished",
-                            "The sending process has been completed.",
-                            65280, -- Green
-                            {
-                                {["name"] = "Sent By", ["value"] = player.Name, ["inline"] = true},
-                                {["name"] = "To", ["value"] = target.Name, ["inline"] = true},
-                                {["name"] = "Item", ["value"] = selectedItemName, ["inline"] = true},
-                                {["name"] = "Total Sent", ["value"] = tostring(sentAmount), ["inline"] = true}
-                            }
-                        )
-
+                    local target = Players:FindFirstChild(selectedTargetName)
+                    
+                    -- Verifica se o alvo saiu
+                    if not target then
+                        addHistoryLog("ERRO: Alvo Saiu", "O jogador " .. selectedTargetName .. " kito do servidor!", Color3.fromRGB(255, 0, 0))
                         isGifting = false
                         giftingToggle:Set(false)
                         break
-                     end
-                     
-                     if currentTotal == 0 then
-                        Rayfield:Notify({Title = "Empty", Content = "Out of: " .. selectedItemName, Duration = 0})
-                        
-                        local sentAmount = startTotal - currentTotal
-                        sendWebhook(
-                            "Stock Depleted",
-                            "Sending stopped as stock ran out.",
-                            16776960, -- Yellow
-                            {
-                                {["name"] = "Sent By", ["value"] = player.Name, ["inline"] = true},
-                                {["name"] = "To", ["value"] = target.Name, ["inline"] = true},
-                                {["name"] = "Item", ["value"] = selectedItemName, ["inline"] = true},
-                                {["name"] = "Total Sent", ["value"] = tostring(sentAmount), ["inline"] = true}
-                            }
-                        )
+                    end
 
+                    -- Verifica se já atingiu o limite
+                    if giftQuantity ~= 999 and totalSentInSession >= giftQuantity then
+                        addHistoryLog("CONCLUÍDO", "Meta atingida: " .. totalSentInSession .. "/" .. giftQuantity, Color3.fromRGB(0, 255, 0))
                         isGifting = false
                         giftingToggle:Set(false)
                         break
-                     end
+                    end
 
-                     local foundTool = false
-                     local myChar = player.Character
-                     local myHum = myChar and myChar:FindFirstChild("Humanoid")
-                     local myBackpack = player.Backpack
-                     
-                     if myHum and myBackpack then
-                        -- PRIORITY 1: Check tools in Backpack
-                        for _, tool in ipairs(myBackpack:GetChildren()) do
-                             if not isGifting then break end
-                             
-                             local isMatch, itemMut = isBrainrot(tool, selectedItemName)
-                             if isMatch then
-                                 foundTool = true
-                                 myHum:EquipTool(tool)
-                                 task.wait(0.2)
-                                 
-                                 -- If tool equipped, verify Target again
-                                 if target.Parent and target.Character then
-                                     local targetHRP = target.Character:FindFirstChild("HumanoidRootPart")
-                                     if targetHRP then
-                                         local tradePrompt = targetHRP:FindFirstChild("TradePrompt")
-                                         if tradePrompt then
-                                             fireproximityprompt(tradePrompt)
-                                         end
-                                     end
-                                 end
-                                 task.wait(1)
-                                 
-                                  if getBrainrotCount(selectedItemName) < currentTotal then
-                                     Rayfield:Notify({Title = "Sent", Content = selectedItemName .. " sent!", Duration = 2})
-                                     -- registrarVenda removed
-                                  end
-                                 break 
-                             end
+                    local guid = ActiveTrade:TryIndex({"guid"})
+                    
+                    if not guid then
+                        -- Detecta fim de trade e conta itens enviados
+                        local currentInv = getBrainrotCount(selectedItemName)
+                        if currentInv < lastInventoryCount then
+                            local sentThisTrade = lastInventoryCount - currentInv
+                            totalSentInSession = totalSentInSession + sentThisTrade
+                            addHistoryLog("Troca Concluída", "Enviados +" .. sentThisTrade .. " itens com sucesso!\nTotal na sessão: " .. totalSentInSession .. "/" .. (giftQuantity == 999 and "Infinito" or giftQuantity), Color3.fromRGB(0, 255, 0))
                         end
-                        
-                        -- PRIORITY 2: If no tool found in backpack, check if we are holding it already
-                        if not foundTool then
-                            for _, tool in ipairs(myChar:GetChildren()) do
-                                local isMatch, itemMut = isBrainrot(tool, selectedItemName)
-                                if isMatch and tool:IsA("Tool") then
-                                    foundTool = true
-                                    -- Already equipped, just trade
-                                    if target.Parent and target.Character then
-                                        local targetHRP = target.Character:FindFirstChild("HumanoidRootPart")
-                                        if targetHRP then
-                                            local tradePrompt = targetHRP:FindFirstChild("TradePrompt")
-                                            if tradePrompt then
-                                                fireproximityprompt(tradePrompt)
-                                            end
+                        lastInventoryCount = currentInv
+
+                        -- MANDA TRADE
+                        pcall(function()
+                            Net:RemoteFunction("Trade.SendTrade"):InvokeServer(target)
+                        end)
+                        itemJaAdicionado = false
+                        task.wait(4)
+                    else
+                        -- JANELA ABERTA: ADICIONA NOS SLOTS COM VERIFICAÇÃO DE LAG
+                        if not itemJaAdicionado then
+                            local items = findItemData(selectedItemName)
+                            local totalItemIds = #items
+                            local remaining = (giftQuantity == 999) and 6 or (giftQuantity - totalSentInSession)
+                            local toAddLimit = math.min(totalItemIds, math.min(6, remaining))
+
+                            if toAddLimit > 0 then
+                                local mutsUsed = {}
+                                for i = 1, toAddLimit do
+                                    local item = items[i]
+                                    local slotStr = tostring(i)
+                                    
+                                    -- Tenta adicionar o item até o servidor confirmar que ele entrou no slot
+                                    local addedSuccess = false
+                                    local retryCount = 0
+                                    
+                                    repeat
+                                        pcall(function()
+                                            Net:RemoteFunction("Trade.SetSlotOffer"):InvokeServer(slotStr, item.id)
+                                        end)
+                                        
+                                        -- Pequena espera pro servidor processar o pacote
+                                        task.wait(0.2) 
+                                        
+                                        -- Verifica se o item apareceu na oferta do jogador1 do ActiveTrade
+                                        local currentOffer = ActiveTrade:TryIndex({"player1", "offer"}) or {}
+                                        if currentOffer[slotStr] and currentOffer[slotStr].id == item.id then
+                                            addedSuccess = true
+                                        else
+                                            retryCount = retryCount + 1
+                                            task.wait(0.3) -- Espera um pouco mais se falhou (lag)
+                                        end
+                                    until addedSuccess or retryCount > 5 or not isGifting or not ActiveTrade:TryIndex({"guid"})
+                                    
+                                    if addedSuccess then
+                                        table.insert(mutsUsed, item.mutation)
+                                    end
+                                end
+                                
+                                itemJaAdicionado = true
+                                addHistoryLog("Itens nos Slots", "Adicionado " .. #mutsUsed .. "x " .. selectedItemName .. "\nMutações: " .. table.concat(mutsUsed, ", "), Color3.fromRGB(255, 255, 0))
+
+                                -- CONFIRMAÇÃO RESILIENTE (READY)
+                                task.spawn(function()
+                                    local readyConfirmed = false
+                                    local readyRetries = 0
+                                    
+                                    while not readyConfirmed and readyRetries < 20 and isGifting and ActiveTrade:TryIndex({"guid"}) do
+                                        -- Verifica a trava de 3 segundos do servidor
+                                        local lastUpdate = ActiveTrade:TryIndex({"timers", "lastUpdate"}) or 0
+                                        local serverTime = workspace:GetServerTimeNow()
+                                        
+                                        if serverTime > (lastUpdate + 3.1) then
+                                            pcall(function()
+                                                Net:RemoteEvent("Trade.ReadyTrade"):FireServer(true)
+                                            end)
+                                            print("Tentativa de Ready enviada...")
+                                        end
+                                        
+                                        task.wait(0.5) -- Checa a cada meio segundo
+                                        
+                                        -- Verifica se o servidor marcou como Ready
+                                        if ActiveTrade:TryIndex({"player1", "ready"}) then
+                                            readyConfirmed = true
+                                            print("Ready confirmado pelo servidor!")
+                                        else
+                                            readyRetries = readyRetries + 1
                                         end
                                     end
-                                    task.wait(1)
-                                    
-                                    if getBrainrotCount(selectedItemName) < currentTotal then
-                                        Rayfield:Notify({Title = "Sent", Content = selectedItemName .. " sent!", Duration = 2})
-                                        -- registrarVenda removed
-                                    end
-                                    break
+                                end)
+                                
+                                Rayfield:Notify({Title = "Status de Lag", Content = "Sincronizando com o servidor...", Duration = 2})
+                            else
+                                if totalItemIds == 0 then
+                                    addHistoryLog("ERRO: Sem Estoque", "Acabaram os " .. selectedItemName .. " do inventário!", Color3.fromRGB(255, 0, 0))
+                                    isGifting = false
+                                    giftingToggle:Set(false)
                                 end
+                                break
                             end
                         end
-                     end
-                     
-                     if not foundTool then
-                         -- No tool found anywhere?
-                         Rayfield:Notify({Title = "Info", Content = "No " .. selectedItemName .. " found.", Duration = 0})
-                         isGifting = false
-                         giftingToggle:Set(false)
-                         break
-                     end
-                     
-                     task.wait(0.1)
+                    end
+                    task.wait(0.5)
                 end
             end)
         end
