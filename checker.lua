@@ -160,6 +160,6 @@ task.spawn(function()
              end
         end
         
-        task.wait(10)
+        task.wait(5)
     end
 end)
