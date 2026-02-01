@@ -37,6 +37,7 @@ local TradeRequests = ClientGlobals.TradeRequests
 local giftingToggle
 local autoAcceptToggle
 
+local giftQuantity = 999 -- Valor padrão: Infinito
 local totalSentInSession = 0 -- Contador global para a sessão atual
 
 local function addHistoryLog(title, content, color)
@@ -44,18 +45,9 @@ local function addHistoryLog(title, content, color)
     HistoryTab:CreateLabel(content)
 end
 
-local itemSalesMapping = {
-    ["Bulbito Bandito Traktorito"] = {valor = 49.90},
-    ["Burgerini Bearini"] = {valor = 29.90},
-    ["Strawberry Elephant"] = {valor = 39.90},
-    ["Martino Gravitino"] = {valor = 59.90},
-    ["Galactio Fantasma"] = {valor = 44.90},
-    ["Esok Sekolah"] = {valor = 34.90}
-}
+-- Create UI
 
--- VALUES TAB REMOVED
 
--- SALES FUNCTIONS REMOVED
 
 -- =========================================================================
 --                               OTHERS TAB
@@ -302,14 +294,16 @@ local selectedItemName = "Strawberry Elephant" -- Default
 local giftQuantity = 10
 local isGifting = false
 
-local brainrotItems = {
-    "Bulbito Bandito Traktorito",
-    "Burgerini Bearini",
-    "Strawberry Elephant",
-    "Martino Gravitino",
-    "Galactio Fantasma",
-    "Esok Sekolah"
-}
+local brainrotItems = {}
+local divineFolder = ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Brainrots"):WaitForChild("Divine")
+
+if divineFolder then
+    for _, item in ipairs(divineFolder:GetChildren()) do
+        table.insert(brainrotItems, item.Name)
+    end
+end
+-- Fallback manual items if needed (optional, keeping clean based on request)
+-- table.insert(brainrotItems, "Esok Sekolah")
 
 -- Function to check if a tool is a valid brainrot based on Attribute
 local function isBrainrot(tool, targetName)
@@ -402,16 +396,6 @@ task.spawn(function()
             local stats = getBrainrotDetailedCount(itemName)
             grandTotal = grandTotal + stats.Total
             
-            -- Sync with API for each variant
-            for _, variant in ipairs(variants) do
-                local key = itemName .. "_" .. variant
-                local currentQty = stats[variant] or 0
-                
-                if currentQty ~= lastCounts[key] then
-                    lastCounts[key] = currentQty
-                    -- atualizarEstoque removed
-                end
-            end
 
             local text = itemName .. ": " .. stats.Total
             
@@ -433,7 +417,6 @@ task.spawn(function()
         if grandTotal == 0 then
             if not hasNotifiedEmpty then
                 hasNotifiedEmpty = true
-                -- registrarContaVazia removed
             end
         else
             hasNotifiedEmpty = false
@@ -454,6 +437,48 @@ local function getPlayerList()
     return list
 end
 
+-- Function to get owned items for dropdown
+local function getOwnedBrainrotList()
+    local list = {}
+    for _, name in ipairs(brainrotItems) do
+        if getBrainrotCount(name) > 0 then
+            table.insert(list, name)
+        end
+    end
+    if #list == 0 then return {"Sem Estoque"} end
+    return list
+end
+
+-- Function to get specific count (Item + Mutation)
+local function getSpecificBrainrotCount(itemName, targetMutation)
+    local stats = getBrainrotDetailedCount(itemName)
+    return stats[targetMutation] or 0
+end
+
+-- Function to get owned mutations for specific brainrot
+local function getOwnedMutationsList(itemName)
+    local list = {}
+    local seen = {}
+    local stats = getBrainrotDetailedCount(itemName)
+    
+    if stats.Normal > 0 then
+        table.insert(list, "Normal")
+        seen["Normal"] = true
+    end
+    
+    for _, m in ipairs(mutationsList) do
+        if stats[m] and stats[m] > 0 then
+            if not seen[m] then
+                table.insert(list, m)
+                seen[m] = true
+            end
+        end
+    end
+    
+    if #list == 0 then return {"Nenhuma"} end
+    return list
+end
+
 
 
 local PlayerDropdown = GiftTab:CreateDropdown({
@@ -467,22 +492,49 @@ local PlayerDropdown = GiftTab:CreateDropdown({
    end,
 })
 
+local ItemDropdown -- Forward declaration
+local MutationDropdown -- Forward declaration
+
 GiftTab:CreateButton({
-   Name = "Refresh Player List",
+   Name = "Refresh Lists (Players & Items)",
    Callback = function()
         PlayerDropdown:Refresh(getPlayerList(), true)
+        local ownedItems = getOwnedBrainrotList()
+        if ItemDropdown then
+            ItemDropdown:Refresh(ownedItems, true)
+        end
+        -- Also refresh mutation list for current item
+        if MutationDropdown and ItemDropdown then
+             local currentItem = ItemDropdown.CurrentOption and ItemDropdown.CurrentOption[1] or ownedItems[1]
+             MutationDropdown:Refresh(getOwnedMutationsList(currentItem), true)
+        end
    end,
 })
 
 -- NEW: Item Selection Dropdown
-GiftTab:CreateDropdown({
+ItemDropdown = GiftTab:CreateDropdown({
    Name = "Select Item to Send",
-   Options = brainrotItems,
-   CurrentOption = "Strawberry Elephant",
+   Options = getOwnedBrainrotList(),
+   CurrentOption = getOwnedBrainrotList()[1],
    MultipleOptions = false,
    Flag = "ItemDropdown",
    Callback = function(Option)
         selectedItemName = Option[1]
+        if MutationDropdown then
+            MutationDropdown:Refresh(getOwnedMutationsList(selectedItemName), true)
+        end
+   end,
+})
+
+local selectedMutation = "Normal"
+MutationDropdown = GiftTab:CreateDropdown({
+   Name = "Select Mutation to Send",
+   Options = getOwnedMutationsList(selectedItemName),
+   CurrentOption = "Normal",
+   MultipleOptions = false,
+   Flag = "MutationDropdown",
+   Callback = function(Option)
+        selectedMutation = Option[1]
    end,
 })
 
@@ -525,7 +577,7 @@ giftingToggle = GiftTab:CreateToggle({
                 
                 addHistoryLog("Sessão Iniciada", "Iniciando envio para: " .. selectedTargetName .. "\nObjetivo: " .. (giftQuantity == 999 and "Infinito" or giftQuantity) .. " itens.", Color3.fromRGB(0, 255, 255))
 
-                -- Função interna para achar IDs e Mutações
+                -- Função interna para achar IDs e Mutações (FILTERED BY MUTATION)
                 local function findItemData(itemName)
                     local data = {}
                     local inventory = PlayerData:TryIndex({"Inventory"}) or {}
@@ -535,13 +587,23 @@ giftingToggle = GiftTab:CreateToggle({
                             if item.sub and item.sub.mutation and item.sub.mutation ~= "" and item.sub.mutation ~= "None" then
                                 mutation = item.sub.mutation
                             end
-                            table.insert(data, {id = id, mutation = mutation})
+                            
+                            -- FILTER: Only add if matches selected mutation
+                            if mutation == selectedMutation then
+                                table.insert(data, {id = id, mutation = mutation})
+                            end
                         end
                     end
                     return data
                 end
 
-                local lastInventoryCount = getBrainrotCount(selectedItemName)
+                local startCount = getSpecificBrainrotCount(selectedItemName, selectedMutation)
+                local targetRemaining = 0
+                if giftQuantity ~= 999 then
+                    targetRemaining = math.max(0, startCount - giftQuantity)
+                end
+                
+                local lastInventoryCount = startCount
 
                 while isGifting do
                     local target = Players:FindFirstChild(selectedTargetName)
@@ -553,20 +615,38 @@ giftingToggle = GiftTab:CreateToggle({
                         giftingToggle:Set(false)
                         break
                     end
+                    
+                    local currentStartInv = getSpecificBrainrotCount(selectedItemName, selectedMutation)
 
-                    -- Verifica se já atingiu o limite
-                    if giftQuantity ~= 999 and totalSentInSession >= giftQuantity then
-                        addHistoryLog("CONCLUÍDO", "Meta atingida: " .. totalSentInSession .. "/" .. giftQuantity, Color3.fromRGB(0, 255, 0))
+                    -- Verifica se já atingiu o limite (Target Remaining logic)
+                    if giftQuantity ~= 999 and currentStartInv <= targetRemaining then
+                        addHistoryLog("CONCLUÍDO", "Meta atingida! Restam: " .. currentStartInv, Color3.fromRGB(0, 255, 0))
                         isGifting = false
                         giftingToggle:Set(false)
                         break
                     end
 
+
                     local guid = ActiveTrade:TryIndex({"guid"})
                     
                     if not guid then
+                        -- Se acabamos de sair de uma trade onde adicionamos itens, espera o inventário atualizar
+                        if itemJaAdicionado then
+                            local timeout = 0
+                            while timeout < 50 do -- 5 segundos max
+                                local checkInv = getSpecificBrainrotCount(selectedItemName, selectedMutation)
+                                if checkInv < lastInventoryCount then
+                                    break -- Inventário atualizou!
+                                end
+                                timeout = timeout + 1
+                                task.wait(0.1)
+                            end
+                            -- Reseta a flag pois já conferimos (ou deu timeout)
+                            itemJaAdicionado = false
+                        end
+
                         -- Detecta fim de trade e conta itens enviados
-                        local currentInv = getBrainrotCount(selectedItemName)
+                        local currentInv = getSpecificBrainrotCount(selectedItemName, selectedMutation)
                         if currentInv < lastInventoryCount then
                             local sentThisTrade = lastInventoryCount - currentInv
                             totalSentInSession = totalSentInSession + sentThisTrade
@@ -574,12 +654,23 @@ giftingToggle = GiftTab:CreateToggle({
                         end
                         lastInventoryCount = currentInv
 
-                        -- MANDA TRADE
-                        pcall(function()
-                            Net:RemoteFunction("Trade.SendTrade"):InvokeServer(target)
-                        end)
-                        itemJaAdicionado = false
-                        task.wait(4)
+                        -- MANDA TRADE (Apenas se tiver estoque DA MUTAÇÃO SELECIONADA)
+                        if currentInv > 0 then
+                            pcall(function()
+                                Net:RemoteFunction("Trade.SendTrade"):InvokeServer(target)
+                            end)
+                            itemJaAdicionado = false
+
+                            -- NOVO: Registra venda se os itens foram enviados (baseado na diferença detectada acima)
+                            if totalSentInSession > 0 then -- Apenas pra dar um contexto de que algo foi enviado
+                            end
+                            task.wait(4)
+                        else
+                            addHistoryLog("ERRO: Sem Estoque", "Acabaram os " .. selectedItemName .. " (" .. selectedMutation .. ") do inventário!", Color3.fromRGB(255, 0, 0))
+                            isGifting = false
+                            giftingToggle:Set(false)
+                            break
+                        end
                     else
                         -- JANELA ABERTA: ADICIONA NOS SLOTS COM VERIFICAÇÃO DE LAG
                         if not itemJaAdicionado then
