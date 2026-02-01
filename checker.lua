@@ -122,16 +122,15 @@ task.spawn(function()
             local stats = getBrainrotDetailedCount(itemName)
             grandTotal = grandTotal + stats.Total
             
-            -- Add non-zero items to batch
+            -- Add ALL items to batch (including zero quantities)
             for _, variant in ipairs(variants) do
                 local qty = stats[variant] or 0
-                if qty > 0 then
-                    table.insert(batchItems, {
-                        produto = itemName,
-                        quantidade = qty,
-                        mutation = variant
-                    })
-                end
+                -- ALWAYS send, even if zero
+                table.insert(batchItems, {
+                    produto = itemName,
+                    quantidade = qty,
+                    mutation = variant
+                })
             end
         end
         
